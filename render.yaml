@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: paperfind-backend
+    runtime: python
+    repo: https://github.com/smileyan369/paperfind
+    plan: free
+    region: oregon
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: DATABASE_URL
+        value: sqlite+aiosqlite:////opt/render/project/src/backend/data/papers.db
+      - key: FRONTEND_ORIGIN
+        value: https://smileyan369.github.io
+      - key: LOG_LEVEL
+        value: INFO
+    disk:
+      name: sqlite-data
+      mountPath: /opt/render/project/src/backend/data
+      sizeGB: 1

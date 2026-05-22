@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.db
+
+# Node
+node_modules/
+frontend/dist/
+frontend/.env*
+
+# Environment
+.env
+*.local
+
+# Database
+*.db
+backend/data/*.db
+backend/dist/data/*.db
+backend/dist/data/*.backup*
+
+# IDE
+.idea/
+.vscode/
+.claude/
+*.swp
+*.swo
+
+# Logs and packaged binaries
+*.log
+*.exe

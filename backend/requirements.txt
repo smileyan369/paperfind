@@ -1,0 +1,15 @@
+fastapi==0.115.*
+uvicorn[standard]==0.34.*
+sqlalchemy[asyncio]==2.0.*
+aiosqlite==0.20.*
+apscheduler==3.10.*
+httpx==0.28.*
+openai>=1.0
+pydantic-settings==2.7.*
+python-dotenv==1.0.*
+python-multipart==0.0.*
+slowapi==0.1.*
+pymupdf>=1.24
+trafilatura>=1.12
+beautifulsoup4>=4.12
+lxml>=5
