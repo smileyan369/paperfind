@@ -4,7 +4,7 @@
 
 项目当前主要面向本地桌面使用：前端由 React 构建，后端由 FastAPI 提供接口，数据默认保存在本地 SQLite 数据库中，也可以通过 PyInstaller 打包为 Windows 单文件 exe。
 
-> 下载 Windows 版本：请在仓库右侧的 Releases 页面下载最新版 exe。首次运行会在 exe 所在目录旁创建本地数据文件。
+> 下载 Windows 版本：请在仓库右侧的 Releases 页面下载最新版 exe，或直接下载 [paperfind-windows.exe](https://github.com/smileyan369/paperfind/releases/latest/download/paperfind-windows.exe)。首次运行会在 exe 所在目录旁创建本地数据文件。
 
 ## 主要功能
 
