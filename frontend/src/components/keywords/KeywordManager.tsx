@@ -64,6 +64,7 @@ export default function KeywordManager({ keywords, loading, onAdd, onToggle, onR
         >
           <option value="all">全部来源</option>
           <option value="arxiv">arXiv</option>
+          <option value="crossref">Crossref</option>
           <option value="semantic_scholar">Semantic Scholar</option>
           <option value="dblp">DBLP</option>
           <option value="google_scholar">Google Scholar</option>

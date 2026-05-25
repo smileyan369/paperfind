@@ -10,6 +10,7 @@ interface UnreachableInfo {
 interface CrawlState {
   crawling: boolean;
   crawlMessage: string | null;
+  crawlProgress: number;
   crawlVersion: number;
   newPapers: Paper[];
   unreachableSources: UnreachableInfo[];
@@ -23,6 +24,7 @@ const CrawlContext = createContext<CrawlState | null>(null);
 export function CrawlProvider({ children }: { children: ReactNode }) {
   const [crawling, setCrawling] = useState(false);
   const [crawlMessage, setCrawlMessage] = useState<string | null>(null);
+  const [crawlProgress, setCrawlProgress] = useState(0);
   const [crawlVersion, setCrawlVersion] = useState(0);
   const [newPapers, setNewPapers] = useState<Paper[]>([]);
   const [unreachableSources, setUnreachableSources] = useState<UnreachableInfo[]>([]);
@@ -45,6 +47,7 @@ export function CrawlProvider({ children }: { children: ReactNode }) {
     abortRef.current = controller;
 
     setCrawling(true);
+    setCrawlProgress(0);
     setCrawlMessage('正在检索...');
     setNewPapers([]);
     setUnreachableSources([]);
@@ -52,12 +55,14 @@ export function CrawlProvider({ children }: { children: ReactNode }) {
     try {
       await streamCrawl(source, keywordIds, (event: CrawlEvent) => {
         if (event.type === 'paper_new' && event.paper) {
+          if (typeof event.progress === 'number') setCrawlProgress(event.progress);
           setNewPapers(prev => {
             const next = [...prev, event.paper!];
             setCrawlMessage(`正在检索... (已找到 ${next.length} 篇)`);
             return next;
           });
         } else if (event.type === 'complete') {
+          setCrawlProgress(100);
           setCrawlVersion(v => v + 1);
           const newCount = event.papers_new ?? 0;
           if (event.unreachable_sources && event.unreachable_sources.length > 0) {
@@ -69,7 +74,11 @@ export function CrawlProvider({ children }: { children: ReactNode }) {
             setCrawlMessage(event.message || '检索完成，未发现新论文');
           }
           setCrawling(false);
+        } else if (event.type === 'status' || event.type === 'progress') {
+          if (typeof event.progress === 'number') setCrawlProgress(event.progress);
+          if (event.message) setCrawlMessage(event.message);
         } else if (event.type === 'error') {
+          if (typeof event.progress === 'number') setCrawlProgress(event.progress);
           setCrawlMessage('检索失败');
           setCrawling(false);
         }
@@ -100,6 +109,7 @@ export function CrawlProvider({ children }: { children: ReactNode }) {
 
         setCrawling(true);
         setCrawlMessage(status.message);
+        setCrawlProgress(status.progress ?? 0);
         setNewPapers([]);
         setUnreachableSources([]);
 
@@ -109,12 +119,14 @@ export function CrawlProvider({ children }: { children: ReactNode }) {
         await streamCrawl('all', undefined, (event: CrawlEvent) => {
           if (cancelled) return;
           if (event.type === 'paper_new' && event.paper) {
+            if (typeof event.progress === 'number') setCrawlProgress(event.progress);
             setNewPapers(prev => {
               const next = [...prev, event.paper!];
               setCrawlMessage(`正在检索... (已找到 ${next.length} 篇)`);
               return next;
             });
           } else if (event.type === 'complete') {
+            setCrawlProgress(100);
             setCrawlVersion(v => v + 1);
             const newCount = event.papers_new ?? 0;
             if (event.unreachable_sources && event.unreachable_sources.length > 0) {
@@ -122,7 +134,11 @@ export function CrawlProvider({ children }: { children: ReactNode }) {
             }
             setCrawlMessage(newCount > 0 ? `检索完成：新增 ${newCount} 篇` : (event.message || '检索完成'));
             setCrawling(false);
+          } else if (event.type === 'status' || event.type === 'progress') {
+            if (typeof event.progress === 'number') setCrawlProgress(event.progress);
+            if (event.message) setCrawlMessage(event.message);
           } else if (event.type === 'error') {
+            if (typeof event.progress === 'number') setCrawlProgress(event.progress);
             setCrawlMessage(event.message || '检索失败');
             setCrawling(false);
           }
@@ -136,7 +152,7 @@ export function CrawlProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <CrawlContext.Provider value={{ crawling, crawlMessage, crawlVersion, newPapers, unreachableSources, startCrawl, clearNewPapers, clearUnreachable }}>
+    <CrawlContext.Provider value={{ crawling, crawlMessage, crawlProgress, crawlVersion, newPapers, unreachableSources, startCrawl, clearNewPapers, clearUnreachable }}>
       {children}
     </CrawlContext.Provider>
   );

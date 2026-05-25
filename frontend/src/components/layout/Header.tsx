@@ -3,7 +3,7 @@ import { useGlobalCrawl } from '../../contexts/CrawlContext';
 
 export default function Header() {
   const location = useLocation();
-  const { crawling, crawlMessage } = useGlobalCrawl();
+  const { crawling, crawlMessage, crawlProgress } = useGlobalCrawl();
   const tabs = [
     { path: '/', label: '论文浏览' },
     { path: '/keywords', label: '关键词管理' },
@@ -31,14 +31,29 @@ export default function Header() {
             </Link>
           ))}
         </nav>
-        <div className="w-48 flex items-center justify-end">
+        <div className="w-56 flex items-center justify-end">
           {crawlMessage && (
-            <span className="text-xs text-indigo-600 bg-indigo-50 px-2 py-1 rounded-full flex items-center gap-1.5 whitespace-nowrap">
+            <div className="w-full max-w-56">
+              <div className="text-xs text-indigo-600 bg-indigo-50 px-2 py-1 rounded-full flex items-center justify-between gap-2">
+                <span className="flex items-center gap-1.5 min-w-0">
+                  {crawling && (
+                    <span className="inline-block w-3 h-3 border-2 border-indigo-300 border-t-indigo-600 rounded-full animate-spin shrink-0" />
+                  )}
+                  <span className="truncate">{crawlMessage}</span>
+                </span>
+                {crawling && (
+                  <span className="tabular-nums shrink-0">{Math.round(crawlProgress)}%</span>
+                )}
+              </div>
               {crawling && (
-                <span className="inline-block w-3 h-3 border-2 border-indigo-300 border-t-indigo-600 rounded-full animate-spin" />
+                <div className="mt-1 h-1 rounded-full bg-indigo-100 overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-indigo-600 transition-all duration-500"
+                    style={{ width: `${Math.max(0, Math.min(100, crawlProgress))}%` }}
+                  />
+                </div>
               )}
-              {crawlMessage}
-            </span>
+            </div>
           )}
         </div>
       </div>

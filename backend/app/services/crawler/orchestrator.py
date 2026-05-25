@@ -12,6 +12,7 @@ from app.models.crawl_log import CrawlLog
 from app.models.keyword import Keyword
 from app.models.paper import Paper, paper_keywords
 from app.services.crawler.arxiv import ArxivCrawler
+from app.services.crawler.crossref import CrossrefCrawler
 from app.services.crawler.dblp import DBLPCrawler
 from app.services.crawler.acm import ACMLCrawler
 from app.services.crawler.ieee import IEEECrawler
@@ -56,6 +57,7 @@ class CrawlOrchestrator:
     def __init__(self):
         self.crawlers = [
             ArxivCrawler(),
+            CrossrefCrawler(),
             SemanticScholarCrawler(),
             DBLPCrawler(),
             GoogleScholarCrawler(),

@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import json
 import logging
 
@@ -41,6 +42,7 @@ class CrawlEventBus:
         self.new_papers: list[dict] = []
         self.unreachable_sources: list[dict] = []
         self.message = ""
+        self.progress = 0
 
     def subscribe(self) -> asyncio.Queue[dict | None]:
         q: asyncio.Queue[dict | None] = asyncio.Queue()
@@ -54,6 +56,7 @@ class CrawlEventBus:
                 "papers_new": self.papers_new,
                 "papers_found": self.papers_found,
                 "message": self.message,
+                "progress": self.progress,
             })
             for paper in self.new_papers:
                 q.put_nowait({"type": "paper_new", "paper": paper})
@@ -84,11 +87,38 @@ class CrawlEventBus:
         self.papers_found = 0
         self.new_papers = []
         self.unreachable_sources = []
+        self.progress = 0
         self.message = "正在检索..."
         self._task = asyncio.create_task(self._run(source, keyword_ids))
 
+    async def _tick_progress(self):
+        """Emit approximate crawl progress while the real crawl is running."""
+        while self.running and self.progress < 92:
+            await asyncio.sleep(1.0)
+            if not self.running:
+                break
+            if self.progress < 12:
+                self.progress = 12
+            elif self.progress < 45:
+                self.progress += 7
+            elif self.progress < 75:
+                self.progress += 5
+            else:
+                self.progress += 3
+            self.progress = min(self.progress, 92)
+            self._broadcast({
+                "type": "progress",
+                "running": True,
+                "source": self.source,
+                "progress": self.progress,
+                "papers_new": self.papers_new,
+                "papers_found": self.papers_found,
+                "message": self.message,
+            })
+
     async def _run(self, source: str, keyword_ids: list[int] | None):
         queue: asyncio.Queue[dict] = asyncio.Queue()
+        ticker_task = asyncio.create_task(self._tick_progress())
         try:
             log = await orchestrator.run_full_crawl(
                 source=source, trigger="manual",
@@ -119,15 +149,26 @@ class CrawlEventBus:
                 elif event["type"] == "error":
                     self.message = event.get("message", "检索失败")
 
+                if event["type"] == "complete":
+                    self.progress = 100
+                    event["progress"] = 100
+                elif event["type"] == "error":
+                    event.setdefault("progress", self.progress)
+                else:
+                    event.setdefault("progress", self.progress)
+
                 self._broadcast(event)
 
                 if event["type"] in ("complete", "error"):
                     break
         except Exception as e:
             logger.exception("Background crawl failed")
-            self._broadcast({"type": "error", "message": str(e)})
+            self._broadcast({"type": "error", "message": str(e), "progress": self.progress})
         finally:
             self.running = False
+            ticker_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await ticker_task
             self._task = None
 
     def get_status(self) -> dict:
@@ -137,6 +178,7 @@ class CrawlEventBus:
             "papers_new": self.papers_new,
             "papers_found": self.papers_found,
             "message": self.message,
+            "progress": self.progress,
         }
 
 
@@ -149,7 +191,7 @@ crawl_bus = CrawlEventBus()
 @limiter.limit("10/minute")
 async def trigger_crawl(request: Request, data: CrawlTriggerRequest):
     source = data.source
-    if source not in ("all", "arxiv", "semantic_scholar", "dblp", "google_scholar", "jnu_library", "ieee", "acm"):
+    if source not in ("all", "arxiv", "crossref", "semantic_scholar", "dblp", "google_scholar", "jnu_library", "ieee", "acm"):
         raise HTTPException(status_code=400, detail=f"Invalid source: {source}")
 
     log = await orchestrator.run_full_crawl(source=source, trigger="manual", keyword_ids=data.keyword_ids)
@@ -164,7 +206,7 @@ async def trigger_crawl(request: Request, data: CrawlTriggerRequest):
 @limiter.limit("10/minute")
 async def trigger_crawl_stream(request: Request, data: CrawlTriggerRequest):
     source = data.source
-    if source not in ("all", "arxiv", "semantic_scholar", "dblp", "google_scholar", "jnu_library", "ieee", "acm"):
+    if source not in ("all", "arxiv", "crossref", "semantic_scholar", "dblp", "google_scholar", "jnu_library", "ieee", "acm"):
         raise HTTPException(status_code=400, detail=f"Invalid source: {source}")
 
     crawl_bus.start(source, data.keyword_ids)

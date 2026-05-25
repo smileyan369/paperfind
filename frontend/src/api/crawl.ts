@@ -15,12 +15,15 @@ interface CrawlLog {
 }
 
 export interface CrawlEvent {
-  type: 'paper_new' | 'complete' | 'error' | 'timeout';
+  type: 'paper_new' | 'complete' | 'error' | 'timeout' | 'status' | 'progress';
   paper?: Paper;
   papers_found?: number;
   papers_new?: number;
   papers_updated?: number;
   message?: string;
+  progress?: number;
+  running?: boolean;
+  source?: string;
   unreachable_sources?: { source: string; reason: string }[];
   unsupported_sources?: string[];
 }
@@ -86,6 +89,7 @@ export interface CrawlStatus {
   papers_new: number;
   papers_found: number;
   message: string;
+  progress: number;
 }
 
 export async function fetchCrawlStatus(): Promise<CrawlStatus> {

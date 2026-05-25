@@ -16,7 +16,7 @@ const ZONE_COLORS: Record<string, string> = {
   Q4: 'text-red-700 bg-red-50 border-red-300',
 };
 
-const SOURCES: PaperSource[] = ['arxiv', 'semantic_scholar', 'dblp', 'google_scholar', 'jnu_library', 'ieee', 'acm'];
+const SOURCES: PaperSource[] = ['arxiv', 'crossref', 'semantic_scholar', 'dblp', 'google_scholar', 'jnu_library', 'ieee', 'acm'];
 
 export default function FilterPanel({ filters, onChange, onReset, activeKeywordIds }: Props) {
   const toggleZone = (z: SciZone) => {

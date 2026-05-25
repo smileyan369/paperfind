@@ -1,5 +1,6 @@
 const SOURCE_LABELS: Record<string, string> = {
   arxiv: 'arXiv',
+  crossref: 'Crossref',
   semantic_scholar: 'Semantic Scholar',
   dblp: 'DBLP',
   google_scholar: 'Google Scholar',
