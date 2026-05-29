@@ -15,7 +15,7 @@ interface CrawlLog {
 }
 
 export interface CrawlEvent {
-  type: 'paper_new' | 'complete' | 'error' | 'timeout' | 'status' | 'progress';
+  type: 'paper_new' | 'complete' | 'error' | 'timeout' | 'status' | 'progress' | 'cancelled';
   paper?: Paper;
   papers_found?: number;
   papers_new?: number;
@@ -71,7 +71,7 @@ export async function streamCrawl(
           try {
             const event: CrawlEvent = JSON.parse(line.slice(6));
             onEvent(event);
-            if (event.type === 'complete' || event.type === 'error') {
+            if (event.type === 'complete' || event.type === 'error' || event.type === 'cancelled') {
               return;
             }
           } catch { /* skip malformed JSON */ }
@@ -94,6 +94,11 @@ export interface CrawlStatus {
 
 export async function fetchCrawlStatus(): Promise<CrawlStatus> {
   const { data } = await client.get('/crawl/status');
+  return data;
+}
+
+export async function cancelCrawl(): Promise<{ cancelled: boolean; message: string }> {
+  const { data } = await client.post('/crawl/cancel');
   return data;
 }
 

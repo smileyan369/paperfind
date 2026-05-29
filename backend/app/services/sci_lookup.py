@@ -2,7 +2,7 @@ import csv
 import logging
 import re
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import async_session
@@ -10,6 +10,8 @@ from app.models.journal import Journal
 from app.models.paper import Paper
 
 logger = logging.getLogger(__name__)
+
+_JOURNAL_CACHE: list[tuple[str, str | None]] | None = None
 
 
 ABBREV_MAP = {
@@ -152,11 +154,20 @@ async def resolve_sci_zone(paper_id: int) -> str | None:
 
 
 async def bulk_resolve(paper_ids: list[int]) -> int:
+    if not paper_ids:
+        return 0
     resolved = 0
-    for pid in paper_ids:
-        zone = await resolve_sci_zone(pid)
-        if zone:
-            resolved += 1
+    async with async_session() as db:
+        result = await db.execute(select(Paper).where(Paper.id.in_(paper_ids)))
+        papers = result.scalars().all()
+        for paper in papers:
+            if not paper.journal_name:
+                continue
+            zone = await _match_journal(db, paper.journal_name)
+            if zone:
+                paper.sci_zone = zone
+                resolved += 1
+        await db.commit()
     return resolved
 
 
@@ -167,30 +178,35 @@ async def match_journal_zone(db: AsyncSession, journal_name: str | None) -> str 
 
 
 async def _match_journal(db: AsyncSession, journal_name: str) -> str | None:
+    global _JOURNAL_CACHE
     norm = normalize_name(journal_name)
     if not norm or len(norm) < 5:
         return None
 
-    result = await db.execute(select(Journal))
-    all_journals = result.scalars().all()
+    if _JOURNAL_CACHE is None:
+        result = await db.execute(select(Journal.name, Journal.sci_zone))
+        _JOURNAL_CACHE = [
+            (normalize_name(name), zone)
+            for name, zone in result.all()
+            if name
+        ]
 
     norm_words = set(norm.split())
 
     best_match: tuple[int, str | None] = (0, None)  # (score, zone)
 
-    for j in all_journals:
-        jn = normalize_name(j.name)
+    for jn, zone in _JOURNAL_CACHE:
         if not jn:
             continue
 
         # Level 1: exact match
         if jn == norm:
-            return j.sci_zone
+            return zone
 
         # Level 2: full substring match (longer contains shorter)
         if len(norm) >= 15 and len(jn) >= 15:
             if norm in jn or jn in norm:
-                return j.sci_zone
+                return zone
 
         # Level 3: word overlap score
         j_words = set(jn.split())
@@ -199,7 +215,7 @@ async def _match_journal(db: AsyncSession, journal_name: str) -> str | None:
             overlap = len(common) / max(len(norm_words), len(j_words))
             score = len(common) + int(overlap * 10)
             if score > best_match[0]:
-                best_match = (score, j.sci_zone)
+                best_match = (score, zone)
 
     if best_match[0] >= 3:  # Threshold: at least 2 common words with some overlap
         return best_match[1]
@@ -208,11 +224,12 @@ async def _match_journal(db: AsyncSession, journal_name: str) -> str | None:
 
 
 async def seed_journals_from_csv(filepath: str = "data/jcr_seed.csv") -> int:
+    global _JOURNAL_CACHE
     count = 0
     async with async_session() as db:
-        existing = (await db.execute(select(Journal))).scalars().all()
-        if existing:
-            logger.info("Journals table already has %d entries, skipping seed", len(existing))
+        existing_count = (await db.execute(select(func.count(Journal.id)))).scalar() or 0
+        if existing_count:
+            logger.info("Journals table already has %d entries, skipping seed", existing_count)
             return 0
 
         try:
@@ -229,6 +246,7 @@ async def seed_journals_from_csv(filepath: str = "data/jcr_seed.csv") -> int:
                     db.add(j)
                     count += 1
             await db.commit()
+            _JOURNAL_CACHE = None
             logger.info("Seeded %d journals from %s", count, filepath)
         except FileNotFoundError:
             logger.warning("Seed file not found: %s", filepath)

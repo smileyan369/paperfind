@@ -65,12 +65,13 @@ export default function KeywordManager({ keywords, loading, onAdd, onToggle, onR
           <option value="all">全部来源</option>
           <option value="arxiv">arXiv</option>
           <option value="crossref">Crossref</option>
+          <option value="openalex">OpenAlex</option>
+          <option value="pubmed">PubMed</option>
+          <option value="europe_pmc">Europe PMC</option>
           <option value="semantic_scholar">Semantic Scholar</option>
           <option value="dblp">DBLP</option>
           <option value="google_scholar">Google Scholar</option>
           <option value="jnu_library">暨大图书馆</option>
-          <option value="ieee">IEEE</option>
-          <option value="acm">ACM</option>
         </select>
         <button
           onClick={handleAdd}

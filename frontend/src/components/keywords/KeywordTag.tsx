@@ -12,7 +12,7 @@ interface Props {
 export default function KeywordTag({ keyword, onToggle, onRemove, active, confirmDelete }: Props) {
   return (
     <div
-      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs border transition-colors ${
+      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs border transition-colors select-none ${
         active
           ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
           : keyword.is_active
@@ -29,20 +29,16 @@ export default function KeywordTag({ keyword, onToggle, onRemove, active, confir
           className="ml-0.5 text-gray-400 hover:text-indigo-600"
           title={keyword.is_active ? '停用' : '启用'}
         >
-          {keyword.is_active ? '○' : '●'}
+          {keyword.is_active ? '●' : '○'}
         </button>
       )}
       {onRemove && (
         <button
           onClick={() => onRemove(keyword.id)}
-          className={`${
-            confirmDelete
-              ? 'text-red-600 font-bold'
-              : 'text-gray-400 hover:text-red-600'
-          }`}
+          className={confirmDelete ? 'text-red-600 font-bold' : 'text-gray-400 hover:text-red-600'}
           title={confirmDelete ? '再次点击确认删除' : '删除'}
         >
-          {confirmDelete ? '⚠' : '×'}
+          ×
         </button>
       )}
     </div>

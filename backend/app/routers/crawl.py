@@ -24,6 +24,10 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/crawl", tags=["crawl"])
 orchestrator = CrawlOrchestrator()
+SUPPORTED_CRAWL_SOURCES = {
+    "all", "arxiv", "crossref", "openalex", "pubmed", "europe_pmc",
+    "semantic_scholar", "dblp", "google_scholar", "jnu_library",
+}
 
 
 # ── Global crawl event bus ──────────────────────────────────────────────
@@ -91,32 +95,83 @@ class CrawlEventBus:
         self.message = "正在检索..."
         self._task = asyncio.create_task(self._run(source, keyword_ids))
 
-    async def _tick_progress(self):
-        """Emit approximate crawl progress while the real crawl is running."""
-        while self.running and self.progress < 92:
-            await asyncio.sleep(1.0)
-            if not self.running:
-                break
-            if self.progress < 12:
-                self.progress = 12
-            elif self.progress < 45:
-                self.progress += 7
-            elif self.progress < 75:
-                self.progress += 5
-            else:
-                self.progress += 3
-            self.progress = min(self.progress, 92)
-            self._broadcast({
-                "type": "progress",
-                "running": True,
-                "source": self.source,
-                "progress": self.progress,
-                "papers_new": self.papers_new,
-                "papers_found": self.papers_found,
-                "message": self.message,
-            })
+    def cancel(self) -> bool:
+        if not self.running:
+            return False
+        self.message = "检索已取消"
+        if self._task and not self._task.done():
+            self._task.cancel()
+        return True
 
     async def _run(self, source: str, keyword_ids: list[int] | None):
+        queue: asyncio.Queue[dict] = asyncio.Queue()
+        crawl_task = asyncio.create_task(orchestrator.run_full_crawl(
+            source=source,
+            trigger="manual",
+            keyword_ids=keyword_ids,
+            event_queue=queue,
+        ))
+        try:
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=0.2)
+                except asyncio.TimeoutError:
+                    if crawl_task.done() and queue.empty():
+                        break
+                    continue
+
+                event_type = event.get("type")
+                if event_type == "paper_new":
+                    self.papers_new += 1
+                    if event.get("paper"):
+                        self.new_papers.append(event["paper"])
+                    self.message = f"正在检索... (已找到 {self.papers_new} 篇)"
+                elif event_type == "complete":
+                    self.papers_found = event.get("papers_found", 0)
+                    self.papers_new = event.get("papers_new", 0)
+                    self.message = (
+                        f"检索完成：新增 {self.papers_new} 篇"
+                        if self.papers_new > 0
+                        else event.get("message", "检索完成，未发现新论文")
+                    )
+                    if event.get("unreachable_sources"):
+                        self.unreachable_sources = event["unreachable_sources"]
+                elif event_type == "progress":
+                    self.progress = max(self.progress, int(event.get("progress", self.progress)))
+                    self.message = event.get("message", self.message)
+                elif event_type == "error":
+                    self.message = event.get("message", "检索失败")
+                elif event_type == "cancelled":
+                    self.message = event.get("message", "检索已取消")
+
+                if event_type == "complete":
+                    self.progress = 100
+                    event["progress"] = 100
+                else:
+                    event.setdefault("progress", self.progress)
+
+                self._broadcast(event)
+                if event_type in ("complete", "error", "cancelled"):
+                    break
+            try:
+                await crawl_task
+            except asyncio.CancelledError:
+                if self.message != "检索已取消":
+                    raise
+        except asyncio.CancelledError:
+            crawl_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await crawl_task
+            self.message = "检索已取消"
+            self._broadcast({"type": "cancelled", "message": self.message, "progress": self.progress})
+        except Exception as e:
+            logger.exception("Background crawl failed")
+            self._broadcast({"type": "error", "message": str(e), "progress": self.progress})
+        finally:
+            self.running = False
+            self._task = None
+
+    async def _run_legacy(self, source: str, keyword_ids: list[int] | None):
         queue: asyncio.Queue[dict] = asyncio.Queue()
         ticker_task = asyncio.create_task(self._tick_progress())
         try:
@@ -191,7 +246,7 @@ crawl_bus = CrawlEventBus()
 @limiter.limit("10/minute")
 async def trigger_crawl(request: Request, data: CrawlTriggerRequest):
     source = data.source
-    if source not in ("all", "arxiv", "crossref", "semantic_scholar", "dblp", "google_scholar", "jnu_library", "ieee", "acm"):
+    if source not in SUPPORTED_CRAWL_SOURCES:
         raise HTTPException(status_code=400, detail=f"Invalid source: {source}")
 
     log = await orchestrator.run_full_crawl(source=source, trigger="manual", keyword_ids=data.keyword_ids)
@@ -206,7 +261,7 @@ async def trigger_crawl(request: Request, data: CrawlTriggerRequest):
 @limiter.limit("10/minute")
 async def trigger_crawl_stream(request: Request, data: CrawlTriggerRequest):
     source = data.source
-    if source not in ("all", "arxiv", "crossref", "semantic_scholar", "dblp", "google_scholar", "jnu_library", "ieee", "acm"):
+    if source not in SUPPORTED_CRAWL_SOURCES:
         raise HTTPException(status_code=400, detail=f"Invalid source: {source}")
 
     crawl_bus.start(source, data.keyword_ids)
@@ -223,7 +278,7 @@ async def trigger_crawl_stream(request: Request, data: CrawlTriggerRequest):
 
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
-                if event is None or event.get("type") in ("complete", "error"):
+                if event is None or event.get("type") in ("complete", "error", "cancelled"):
                     break
         finally:
             crawl_bus.unsubscribe(q)
@@ -242,6 +297,12 @@ async def trigger_crawl_stream(request: Request, data: CrawlTriggerRequest):
 @router.get("/status")
 async def crawl_status():
     return crawl_bus.get_status()
+
+
+@router.post("/cancel")
+async def cancel_crawl():
+    cancelled = crawl_bus.cancel()
+    return {"cancelled": cancelled, "message": "检索已取消" if cancelled else "当前没有正在进行的检索"}
 
 
 @router.get("/logs", response_model=CrawlLogListResponse)

@@ -24,3 +24,8 @@ export async function importKeywords(keywords: string, source = 'all'): Promise<
   const { data } = await client.post('/keywords/import', { keywords, source });
   return data;
 }
+
+export async function suggestKeywords(query: string, limit = 8): Promise<{ suggestions: string[]; source: string }> {
+  const { data } = await client.post('/keywords/suggest', { query, limit });
+  return data;
+}

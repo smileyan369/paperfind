@@ -1,5 +1,5 @@
   export type SciZone = 'Q1' | 'Q2' | 'Q3' | 'Q4';
-export type PaperSource = 'arxiv' | 'crossref' | 'semantic_scholar' | 'dblp' | 'google_scholar' | 'jnu_library' | 'ieee' | 'acm';
+export type PaperSource = 'arxiv' | 'crossref' | 'openalex' | 'pubmed' | 'europe_pmc' | 'semantic_scholar' | 'dblp' | 'google_scholar' | 'jnu_library';
 export type SortField = 'sci_zone' | 'publication_date' | 'citation_count' | 'title' | 'updated_at' | 'crawled_at';
 export type SortOrder = 'asc' | 'desc';
 

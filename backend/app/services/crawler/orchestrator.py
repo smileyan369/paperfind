@@ -19,12 +19,21 @@ from app.services.crawler.ieee import IEEECrawler
 from app.services.crawler.semantic_scholar import SemanticScholarCrawler
 from app.services.crawler.google_scholar import GoogleScholarCrawler
 from app.services.crawler.jnu_library import JNULibraryCrawler
+from app.services.crawler.openalex import OpenAlexCrawler
+from app.services.crawler.pubmed import PubMedCrawler
+from app.services.crawler.europe_pmc import EuropePMCCrawler
 
 from app.utils.dedup import deduplicate_new_papers, generate_paper_key
+from app.utils.dedup import normalize_title
 
 logger = logging.getLogger(__name__)
 
-_CJK_RE = re.compile(r'[一-鿿]')
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+
+
+def _normalize_search_text(value: str) -> str:
+    value = value.lower().replace("_", " ").replace("-", " ")
+    return re.sub(r"\s+", " ", value).strip()
 
 
 def _keyword_matches(text: str, keyword: str) -> bool:
@@ -32,13 +41,67 @@ def _keyword_matches(text: str, keyword: str) -> bool:
     Words are split by space. Each word must be present.
     English words use whole-word boundary match (e.g. "AR" won't match "car").
     Chinese words use simple substring match."""
-    t = text.lower()
-    words = keyword.split()
+    t = _normalize_search_text(text)
+    normalized_keyword = _normalize_search_text(keyword)
+    if normalized_keyword and len(normalized_keyword) > 2 and normalized_keyword in t:
+        return True
+    words = normalized_keyword.split()
+    if not words:
+        return False
+    if len(words) == 1 and len(words[0]) <= 2 and not _CJK_RE.search(keyword):
+        short = words[0]
+        if short == "ar":
+            return bool(re.search(r"\baugmented\s+reality\b", t)) or bool(re.search(r"\bAR\b", text))
+        return bool(re.search(rf"\b{re.escape(short.upper())}\b", text))
     if _CJK_RE.search(keyword):
-        return all(w.lower() in t for w in words)
+        return all(w in t for w in words)
     return all(
-        bool(re.search(r'\b' + re.escape(w.lower()) + r'\b', t))
+        bool(re.search(r'\b' + re.escape(w) + r'\b', t))
         for w in words
+    )
+
+
+def _query_variants(keyword: str) -> list[str]:
+    normalized = _normalize_search_text(keyword)
+    translation_hints = {
+        "网络安全": ["cybersecurity", "network security"],
+        "信息安全": ["information security", "cybersecurity"],
+        "人体运动预测": ["human motion prediction", "long term human motion prediction"],
+        "长期人体运动预测": ["long term human motion prediction"],
+        "动作预测": ["motion prediction", "human motion prediction"],
+        "医学影像": ["medical imaging", "radiology"],
+        "论文推荐": ["paper recommendation", "research paper recommendation"],
+    }
+    translation_hints.update({
+        "\u7f51\u7edc\u5b89\u5168": ["cybersecurity", "network security"],
+        "\u4fe1\u606f\u5b89\u5168": ["information security", "cybersecurity"],
+        "\u4eba\u4f53\u8fd0\u52a8\u9884\u6d4b": ["human motion prediction", "long term human motion prediction"],
+        "\u957f\u671f\u4eba\u4f53\u8fd0\u52a8\u9884\u6d4b": ["long term human motion prediction"],
+        "\u52a8\u4f5c\u9884\u6d4b": ["motion prediction", "human motion prediction"],
+        "\u533b\u5b66\u5f71\u50cf": ["medical imaging", "radiology"],
+        "\u8bba\u6587\u63a8\u8350": ["paper recommendation", "research paper recommendation"],
+    })
+    abbreviation_hints = {
+        "ar": ["augmented reality"],
+        "vr": ["virtual reality"],
+        "mlp": ["multi layer perceptron", "all mlp"],
+    }
+    variants: list[str] = []
+    extra: list[str] = []
+    for zh, hints in translation_hints.items():
+        if zh in keyword:
+            extra.extend(hints)
+    extra.extend(abbreviation_hints.get(normalized, []))
+    for item in (keyword.strip(), normalized, *extra):
+        if item and item not in variants:
+            variants.append(item)
+    return variants
+
+
+def _matches_keyword(title: str, abstract: str | None, keyword: str) -> bool:
+    return any(
+        _keyword_matches(title, variant) or _keyword_matches(abstract or "", variant)
+        for variant in _query_variants(keyword)
     )
 
 
@@ -48,7 +111,10 @@ def _parse_date(value: Any) -> date | None:
     if isinstance(value, date):
         return value
     try:
-        return date.fromisoformat(str(value)[:10])
+        parsed = date.fromisoformat(str(value)[:10])
+        if parsed > date.today():
+            return None
+        return parsed
     except (ValueError, TypeError):
         return None
 
@@ -58,6 +124,9 @@ class CrawlOrchestrator:
         self.crawlers = [
             ArxivCrawler(),
             CrossrefCrawler(),
+            OpenAlexCrawler(),
+            PubMedCrawler(),
+            EuropePMCCrawler(),
             SemanticScholarCrawler(),
             DBLPCrawler(),
             GoogleScholarCrawler(),
@@ -118,17 +187,28 @@ class CrawlOrchestrator:
 
             all_papers: list[dict[str, Any]] = []
             paper_keyword_map: dict[str, set[int]] = {}
+            active_crawlers = [
+                c for c in self.crawlers
+                if (source == "all" or c.name == source) and c.is_supported
+            ]
+            total_crawl_steps = max(1, len(keywords) * len(active_crawlers))
+            completed_crawl_steps = 0
             for kw in keywords:
-                tasks = []
-                for crawler in self.crawlers:
-                    if source != "all" and crawler.name != source:
-                        continue
-                    if not crawler.is_supported:
-                        continue
-                    tasks.append(self._safe_crawl(crawler, kw.text, max_results=100))
+                tasks = [
+                    asyncio.create_task(self._safe_crawl(crawler, kw.text, max_results=120))
+                    for crawler in active_crawlers
+                ]
 
-                results = await asyncio.gather(*tasks)
-                for result in results:
+                for task in asyncio.as_completed(tasks):
+                    result = await task
+                    completed_crawl_steps += 1
+                    if event_queue is not None:
+                        progress = min(85, max(1, int(completed_crawl_steps / total_crawl_steps * 85)))
+                        await event_queue.put({
+                            "type": "progress",
+                            "progress": progress,
+                            "message": f"正在检索... ({completed_crawl_steps}/{total_crawl_steps})",
+                        })
                     for pdata in result:
                         all_papers.append(pdata)
                         key = generate_paper_key(pdata)
@@ -140,6 +220,8 @@ class CrawlOrchestrator:
 
             logger.info("Collected %d raw papers, %d unique by key",
                         len(all_papers), len(paper_keyword_map))
+            if event_queue is not None:
+                await event_queue.put({"type": "progress", "progress": 88, "message": "正在过滤论文..."})
 
             # Filter: keep only papers whose title/abstract actually matches the keyword
             kw_text_map = {kw.id: kw.text for kw in keywords}
@@ -151,19 +233,19 @@ class CrawlOrchestrator:
                 title = pdata.get("title") or ""
                 abstract = pdata.get("abstract") or ""
                 # Check against trigger keywords only
-                if any(_keyword_matches(title, kw_text_map[kw_id])
-                       or _keyword_matches(abstract, kw_text_map[kw_id])
-                       for kw_id in kw_ids):
+                if any(_matches_keyword(title, abstract, kw_text_map[kw_id]) for kw_id in kw_ids):
                     filtered_papers.append(pdata)
                 else:
-                    del paper_keyword_map[key]
                     removed += 1
             all_papers = filtered_papers
             if removed:
                 logger.info("Filtered %d papers not matching their trigger keywords", removed)
 
             existing_keys = await self._load_existing_keys()
+            existing_index = await self._load_existing_index()
             unique_papers = deduplicate_new_papers(all_papers, existing_keys)
+            if event_queue is not None:
+                await event_queue.put({"type": "progress", "progress": 92, "message": "正在整理去重结果..."})
 
             papers_added = 0
             papers_updated = 0
@@ -179,7 +261,7 @@ class CrawlOrchestrator:
                 t = title.lower()
                 a = (abstract or "").lower()
                 return {kw_id for kw_id, kw_text in all_kw_map.items()
-                        if _keyword_matches(t, kw_text) or _keyword_matches(a, kw_text)}
+                        if _matches_keyword(t, a, kw_text)}
 
             new_paper_infos: list[dict] = []
 
@@ -188,7 +270,7 @@ class CrawlOrchestrator:
                     key = generate_paper_key(pdata)
                     kw_ids = paper_keyword_map.get(key, set())
 
-                    existing = await self._find_existing(db, pdata)
+                    existing = await self._find_existing(db, pdata, existing_index)
                     if existing:
                         updated = False
                         if pdata.get("citation_count", 0) > (existing.citation_count or 0):
@@ -202,6 +284,12 @@ class CrawlOrchestrator:
                             updated = True
                         if pdata.get("doi") and not existing.doi:
                             existing.doi = pdata["doi"]
+                            updated = True
+                        if pdata.get("pdf_url") and not existing.pdf_url:
+                            existing.pdf_url = pdata["pdf_url"]
+                            updated = True
+                        if pdata.get("url") and (not existing.url or existing.url.startswith("https://api.openalex.org/")):
+                            existing.url = pdata["url"]
                             updated = True
                         if updated:
                             existing.updated_at = func.now()
@@ -229,6 +317,7 @@ class CrawlOrchestrator:
                         )
                         db.add(paper)
                         await db.flush()
+                        self._remember_existing(existing_index, pdata, paper.id)
                         papers_added += 1
 
                         # Link to ALL matching keywords (not just trigger keyword)
@@ -247,6 +336,8 @@ class CrawlOrchestrator:
                         })
 
                 await db.commit()
+            if event_queue is not None:
+                await event_queue.put({"type": "progress", "progress": 95, "message": "正在保存论文..."})
 
             from app.services.sci_lookup import bulk_resolve
 
@@ -258,6 +349,8 @@ class CrawlOrchestrator:
                 if unresolved:
                     resolved_count = await bulk_resolve(unresolved)
                     logger.info("Resolved SCI zones for %d papers", resolved_count)
+            if event_queue is not None:
+                await event_queue.put({"type": "progress", "progress": 98, "message": "正在更新分区信息..."})
 
             # Push paper_new events AFTER SCI zone resolution
             if event_queue is not None and new_paper_infos:
@@ -322,6 +415,16 @@ class CrawlOrchestrator:
                     "type": "error",
                     "message": str(e),
                 })
+        except asyncio.CancelledError:
+            logger.info("Crawl cancelled")
+            log.status = "cancelled"
+            log.error_message = "用户取消检索"
+            if event_queue is not None:
+                await event_queue.put({
+                    "type": "cancelled",
+                    "message": "检索已取消",
+                })
+            raise
         finally:
             log.finished_at = datetime.now(timezone.utc)
             async with async_session() as db:
@@ -344,7 +447,33 @@ class CrawlOrchestrator:
  
     async def _safe_crawl(self, crawler, keyword: str, max_results: int = 100) -> list[dict[str, Any]]:
         try:
-            return await crawler.search(keyword, max_results=max_results)
+            results: list[dict[str, Any]] = []
+            seen: set[str] = set()
+            variants = _query_variants(keyword)
+            per_query = max(20, max_results // max(1, len(variants)))
+            if crawler.name == "arxiv":
+                batches = []
+                for query in variants:
+                    batches.append(await asyncio.wait_for(crawler.search(query, max_results=per_query), timeout=28))
+            else:
+                tasks = [
+                    asyncio.create_task(crawler.search(query, max_results=per_query))
+                    for query in variants
+                ]
+                batches = await asyncio.gather(
+                    *(asyncio.wait_for(task, timeout=24) for task in tasks),
+                    return_exceptions=True,
+                )
+            for batch in batches:
+                if isinstance(batch, Exception):
+                    logger.warning("Crawler %s variant failed for '%s': %s", crawler.name, keyword, str(batch)[:160])
+                    continue
+                for paper in batch:
+                    key = generate_paper_key(paper)
+                    if key not in seen:
+                        seen.add(key)
+                        results.append(paper)
+            return results
         except Exception as e:
             import httpx
             msg = str(e)
@@ -377,33 +506,55 @@ class CrawlOrchestrator:
                 keys.add(generate_paper_key(pdata))
             return keys
 
-    async def _find_existing(self, db: AsyncSession, pdata: dict) -> Paper | None:
+    async def _load_existing_index(self) -> dict[str, dict[str, int]]:
+        async with async_session() as db:
+            result = await db.execute(
+                select(Paper.id, Paper.doi, Paper.arxiv_id, Paper.title)
+            )
+            index: dict[str, dict[str, int]] = {"doi": {}, "arxiv": {}, "title": {}}
+            for paper_id, doi, arxiv_id, title in result.all():
+                if doi:
+                    index["doi"][str(doi).lower()] = paper_id
+                if arxiv_id:
+                    index["arxiv"][str(arxiv_id).lower()] = paper_id
+                if title:
+                    index["title"][normalize_title(title)] = paper_id
+            return index
+
+    def _remember_existing(self, index: dict[str, dict[str, int]], pdata: dict, paper_id: int):
+        doi = pdata.get("doi")
+        arxiv_id = pdata.get("arxiv_id")
+        title = pdata.get("title")
+        if doi:
+            index["doi"][str(doi).lower()] = paper_id
+        if arxiv_id:
+            index["arxiv"][str(arxiv_id).lower()] = paper_id
+        if title:
+            index["title"][normalize_title(title)] = paper_id
+
+    async def _find_existing(self, db: AsyncSession, pdata: dict, index: dict[str, dict[str, int]] | None = None) -> Paper | None:
+        if index is None:
+            index = await self._load_existing_index()
         doi = pdata.get("doi")
         if doi:
-            result = await db.execute(
-                select(Paper).where(Paper.doi == doi)
-            )
-            p = result.scalar_one_or_none()
+            paper_id = index["doi"].get(str(doi).lower())
+            p = await db.get(Paper, paper_id) if paper_id else None
             if p:
                 return p
 
         arxiv_id = pdata.get("arxiv_id")
         if arxiv_id:
-            result = await db.execute(
-                select(Paper).where(Paper.arxiv_id == arxiv_id)
-            )
-            p = result.scalar_one_or_none()
+            paper_id = index["arxiv"].get(str(arxiv_id).lower())
+            p = await db.get(Paper, paper_id) if paper_id else None
             if p:
                 return p
 
         title = pdata.get("title", "")
         if title:
-            from app.utils.dedup import normalize_title
-
             nt = normalize_title(title)
-            result = await db.execute(select(Paper))
-            for p in result.scalars().all():
-                if normalize_title(p.title) == nt:
-                    return p
+            paper_id = index["title"].get(nt)
+            p = await db.get(Paper, paper_id) if paper_id else None
+            if p:
+                return p
 
         return None

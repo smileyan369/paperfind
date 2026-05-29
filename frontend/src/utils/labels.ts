@@ -1,12 +1,13 @@
 const SOURCE_LABELS: Record<string, string> = {
   arxiv: 'arXiv',
   crossref: 'Crossref',
+  openalex: 'OpenAlex',
+  pubmed: 'PubMed',
+  europe_pmc: 'Europe PMC',
   semantic_scholar: 'Semantic Scholar',
   dblp: 'DBLP',
   google_scholar: 'Google Scholar',
   jnu_library: '暨大图书馆',
-  ieee: 'IEEE (未启用)',
-  acm: 'ACM (未启用)',
 };
 
 export function sourceLabel(source: string): string {

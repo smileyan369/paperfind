@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { apiUrl } from '../../api/client';
+import { useAppConfig } from '../../contexts/ConfigContext';
 
 interface ProcessingPaper {
   id: number;
@@ -15,6 +16,7 @@ interface ProgressData {
 }
 
 export default function SummaryProgressBar() {
+  const { config } = useAppConfig();
   const [data, setData] = useState<ProgressData | null>(null);
 
   useEffect(() => {
@@ -27,12 +29,16 @@ export default function SummaryProgressBar() {
         if (active) setData(json);
       } catch { /* ignore */ }
     };
+    if (!config?.ai_available || !config?.auto_summary_enabled) {
+      setData(null);
+      return;
+    }
     fetchProgress();
     const interval = setInterval(fetchProgress, 5000);
     return () => { active = false; clearInterval(interval); };
-  }, []);
+  }, [config?.ai_available, config?.auto_summary_enabled]);
 
-  if (!data || !data.running) return null;
+  if (!config?.ai_available || !config?.auto_summary_enabled || !data || !data.running) return null;
 
   const total = data.total_papers || 1;
   const done = data.total_summarized;
@@ -40,7 +46,7 @@ export default function SummaryProgressBar() {
   const hasProcessing = data.currently_processing.length > 0;
 
   return (
-    <div className="bg-white border border-gray-200 rounded-lg px-4 py-3 mb-4">
+    <div className="glass-panel rounded-2xl px-4 py-3 mb-4 soft-appear">
       <div className="flex items-center justify-between mb-2">
         <span className="text-sm font-medium text-gray-700">
           已总结 <span className="text-indigo-600 font-semibold">{done}</span> / {total} 篇
@@ -57,9 +63,9 @@ export default function SummaryProgressBar() {
       </div>
 
       {/* Progress bar */}
-      <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
+      <div className="w-full h-2 bg-white/80 rounded-full overflow-hidden border border-white/70">
         <div
-          className="h-full bg-gradient-to-r from-indigo-500 to-indigo-400 rounded-full transition-all duration-700 ease-out"
+          className="h-full bg-gradient-to-r from-indigo-500 to-cyan-500 rounded-full transition-all duration-700 ease-out progress-glow"
           style={{ width: `${pct}%` }}
         />
       </div>

@@ -71,7 +71,7 @@ export default function PaperDetailModal({ paperId, onClose, onSummaryDone, aiAv
     try {
       const res = await fetch(apiUrl(`/summary/${id}/stream`), { signal: abort.signal });
       if (!res.ok) {
-        setStreamError(`请求失败 (${res.status})`);
+        setStreamError(res.status === 503 ? '无 AI：请先在设置中配置 API Key' : `请求失败 (${res.status})`);
         setIsStreaming(false);
         clearInterval(timer);
         return;
@@ -122,9 +122,10 @@ export default function PaperDetailModal({ paperId, onClose, onSummaryDone, aiAv
                 } else {
                   fetchPaperDetail(id).then(p => {
                     if (p) setPaper(p);
+                    if (p?.summary_status === 'completed' && p.summary_cn) onSummaryDone?.(id);
                   });
+                  continue;
                 }
-                // Notify parent so the paper card grid updates
                 onSummaryDone?.(id);
               } else if (data.type === 'error') {
                 setStreamError(data.message);
@@ -194,7 +195,7 @@ export default function PaperDetailModal({ paperId, onClose, onSummaryDone, aiAv
             ) : !paper.summary_cn && !streamingText && (
               <div className="mb-4">
                 <p className="text-sm text-gray-400 bg-gray-50 rounded-lg p-3 text-center">
-                  该论文暂无摘要，可点击下方 AI 总结生成中文摘要
+                  该论文暂无摘要，可点击下方 AI 导读生成中文导读
                 </p>
               </div>
             )}
@@ -226,7 +227,7 @@ export default function PaperDetailModal({ paperId, onClose, onSummaryDone, aiAv
             {/* Completed AI Summary */}
             {!isStreaming && paper.summary_status === 'completed' && paper.summary_cn && (
               <div className="mb-4">
-                <h4 className="font-semibold text-sm text-indigo-700 mb-1">AI 中文总结</h4>
+                <h4 className="font-semibold text-sm text-indigo-700 mb-1">AI 中文导读</h4>
                 <div className="text-sm text-gray-700 bg-indigo-50 rounded-lg p-3 whitespace-pre-wrap">
                   {paper.summary_cn}
                 </div>
@@ -262,7 +263,7 @@ export default function PaperDetailModal({ paperId, onClose, onSummaryDone, aiAv
               <div className="mb-4">
                 <div className="text-sm text-amber-600 bg-amber-50 rounded-lg p-3 flex items-center gap-2">
                   <span className="inline-block w-3 h-3 border border-amber-400 border-t-amber-600 rounded-full animate-spin" />
-                  正在生成 AI 总结...
+                  正在生成 AI 导读...
                 </div>
               </div>
             )}
@@ -289,7 +290,7 @@ export default function PaperDetailModal({ paperId, onClose, onSummaryDone, aiAv
                 </a>
               )}
               {!aiAvailable && paper.summary_status !== 'completed' && (
-                <span className="text-xs text-gray-400">AI 摘要未启用（未配置 API Key）</span>
+                <span className="text-xs text-gray-400">无 AI：未配置 API Key</span>
               )}
               {aiAvailable && paper.summary_status !== 'completed' && !isStreaming && (
                 <button
@@ -297,7 +298,7 @@ export default function PaperDetailModal({ paperId, onClose, onSummaryDone, aiAv
                   disabled={isStreaming || paper.summary_status === 'processing'}
                   className="text-sm px-3 py-1.5 rounded-md bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50"
                 >
-                  {paper.summary_status === 'processing' ? '生成中...' : 'AI 总结'}
+                  {paper.summary_status === 'processing' ? '生成中...' : 'AI 导读'}
                 </button>
               )}
               {isStreaming && (

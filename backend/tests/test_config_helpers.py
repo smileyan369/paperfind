@@ -1,6 +1,7 @@
 import unittest
 
-from app.routers.config import _is_masked_key, _mask_key, _to_bool
+from app.routers.config import ConfigUpdateRequest, _is_masked_key, _mask_key, _to_bool
+from app.routers.keywords import _fallback_suggestions
 
 
 class ConfigHelperTests(unittest.TestCase):
@@ -24,6 +25,15 @@ class ConfigHelperTests(unittest.TestCase):
         for value in (False, None, "", "false", "0", "no", "off"):
             with self.subTest(value=value):
                 self.assertFalse(_to_bool(value))
+
+    def test_research_profile_is_accepted_by_config_request(self):
+        data = ConfigUpdateRequest(research_profile="AI for radiology")
+        self.assertEqual(data.research_profile, "AI for radiology")
+
+    def test_fallback_keyword_suggestions_extract_terms(self):
+        suggestions = _fallback_suggestions("找医学影像报告生成 radiology report generation 的论文", 5)
+        self.assertTrue(suggestions)
+        self.assertLessEqual(len(suggestions), 5)
 
 
 if __name__ == "__main__":

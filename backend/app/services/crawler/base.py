@@ -10,6 +10,18 @@ from app.utils.retry import async_retry
 
 logger = logging.getLogger(__name__)
 
+_CLIENT: httpx.AsyncClient | None = None
+
+
+async def _get_client() -> httpx.AsyncClient:
+    global _CLIENT
+    proxy = settings.proxy_url or None
+    if _CLIENT is None or _CLIENT.is_closed:
+        timeout = httpx.Timeout(connect=6.0, read=18.0, write=10.0, pool=8.0)
+        limits = httpx.Limits(max_connections=24, max_keepalive_connections=12)
+        _CLIENT = httpx.AsyncClient(timeout=timeout, proxy=proxy, limits=limits, follow_redirects=True)
+    return _CLIENT
+
 
 class BaseCrawler(ABC):
     name: str = "base"
@@ -25,12 +37,11 @@ class BaseCrawler(ABC):
 
     @async_retry(max_retries=3, base_delay=1.0, exceptions=(httpx.HTTPError, ConnectionError))
     async def _request(self, url: str, params: dict | None = None) -> httpx.Response:
-        proxy = settings.proxy_url or None
         async with self.semaphore:
-            async with httpx.AsyncClient(timeout=30.0, proxy=proxy) as client:
-                resp = await client.get(url, params=params)
-                resp.raise_for_status()
-                return resp
+            client = await _get_client()
+            resp = await client.get(url, params=params)
+            resp.raise_for_status()
+            return resp
 
     def _to_paper_data(
         self,

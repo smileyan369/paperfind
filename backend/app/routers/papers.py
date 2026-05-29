@@ -4,6 +4,7 @@ import logging
 from datetime import date
 from typing import Sequence
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy import and_, case, desc, func, or_, select
@@ -15,6 +16,7 @@ from app.database import get_db
 from app.models.keyword import Keyword
 from app.models.paper import Paper, paper_keywords
 from app.models.summary import Summary
+from app.services.summary_queue import get_summary_queue
 from app.schemas.paper import (
     PaperDetailResponse,
     PaperFilterParams,
@@ -27,6 +29,14 @@ from app.schemas.paper import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/papers", tags=["papers"])
+
+
+def _not_future_condition():
+    today = date.today()
+    return or_(
+        Paper.publication_date.is_(None),
+        Paper.publication_date <= today,
+    )
 
 
 def _apply_paper_filters(
@@ -43,6 +53,7 @@ def _apply_paper_filters(
     starred: bool | None = None,
 ) -> Select:
     """Apply paper filter conditions to a query. Reused across list / stats / export."""
+    query = query.where(_not_future_condition())
     if sci_zone:
         query = query.where(Paper.sci_zone.in_(sci_zone))
     if source:
@@ -75,12 +86,74 @@ def _apply_paper_filters(
             or_(Paper.title.ilike(like), Paper.abstract.ilike(like))
         )
     if has_summary is True:
-        query = query.where(Paper.id.in_(select(Summary.paper_id).where(Summary.status == "completed")))
+        query = query.where(Paper.id.in_(select(Summary.paper_id).where(Summary.status == "completed", Summary.summary_cn.isnot(None))))
     elif has_summary is False:
-        query = query.where(Paper.id.notin_(select(Summary.paper_id).where(Summary.status == "completed")))
+        query = query.where(Paper.id.notin_(select(Summary.paper_id).where(Summary.status == "completed", Summary.summary_cn.isnot(None))))
     if starred is not None:
         query = query.where(Paper.is_starred == starred)
     return query
+
+
+async def _fetch_huggingface_daily_papers(limit: int = 6) -> list[dict]:
+    try:
+        async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
+            resp = await client.get(
+                "https://huggingface.co/papers",
+                headers={"User-Agent": "PaperFind/0.1 (+local research agent)"},
+            )
+            resp.raise_for_status()
+        html = resp.text
+    except Exception as e:
+        logger.info("Daily digest remote fetch failed: %s", e)
+        return []
+
+    import html as html_lib
+    import re
+
+    items: list[dict] = []
+    seen: set[str] = set()
+    pattern = re.compile(r'href="(/papers/[^"]+)".{0,900}?<h3[^>]*>(.*?)</h3>', re.S)
+    for href, raw_title in pattern.findall(html):
+        title = re.sub(r"<[^>]+>", " ", raw_title)
+        title = html_lib.unescape(" ".join(title.split()))
+        if not title or title.lower() in seen:
+            continue
+        seen.add(title.lower())
+        items.append({
+            "title": title,
+            "url": f"https://huggingface.co{href}",
+            "source": "Hugging Face Daily Papers",
+            "summary": "社区每日论文榜单，适合发现不同领域的新论文。",
+        })
+        if len(items) >= limit:
+            break
+    return items
+
+
+@router.get("/daily-digest")
+async def daily_digest(limit: int = Query(6, ge=1, le=12), db: AsyncSession = Depends(get_db)):
+    remote = await _fetch_huggingface_daily_papers(limit=limit)
+    if remote:
+        return {"items": remote, "source": "Hugging Face Daily Papers"}
+
+    result = await db.execute(
+        select(Paper)
+        .where(_not_future_condition())
+        .order_by(Paper.publication_date.desc().nullslast(), Paper.crawled_at.desc())
+        .limit(limit)
+    )
+    items = [
+        {
+            "id": p.id,
+            "title": p.title,
+            "url": p.url,
+            "source": p.source,
+            "date": p.publication_date.isoformat() if p.publication_date else (str(p.year) if p.year else None),
+            "summary": p.abstract[:120] if p.abstract else "本地最近检索到的论文。",
+        }
+        for p in result.scalars().all()
+    ]
+    return {"items": items, "source": "本地最近论文"}
 
 
 @router.get("", response_model=PaperListResponse)
@@ -160,16 +233,19 @@ async def list_papers(
             select(Summary.paper_id).where(
                 Summary.paper_id.in_(paper_ids),
                 Summary.status == "completed",
+                Summary.summary_cn.isnot(None),
             )
         )
         summary_paper_ids = {r[0] for r in summary_result.all()}
-        proc_result = await db.execute(
-            select(Summary.paper_id).where(
-                Summary.paper_id.in_(paper_ids),
-                Summary.status == "processing",
+        queue_running = bool(get_summary_queue().stats.get("running"))
+        if queue_running:
+            proc_result = await db.execute(
+                select(Summary.paper_id).where(
+                    Summary.paper_id.in_(paper_ids),
+                    Summary.status == "processing",
+                )
             )
-        )
-        processing_paper_ids = {r[0] for r in proc_result.all()}
+            processing_paper_ids = {r[0] for r in proc_result.all()}
 
     paper_responses = []
     for p in papers:
@@ -234,7 +310,7 @@ async def get_stats(
     # With summary count (filtered)
     summary_query = _apply_paper_filters(
         select(func.count(Paper.id)), **filter_kwargs
-    ).where(Paper.id.in_(select(Summary.paper_id).where(Summary.status == "completed")))
+    ).where(Paper.id.in_(select(Summary.paper_id).where(Summary.status == "completed", Summary.summary_cn.isnot(None))))
     with_summary = (await db.execute(summary_query)).scalar() or 0
 
     # Zone counts (filtered)
@@ -330,8 +406,8 @@ async def get_paper(paper_id: int, db: AsyncSession = Depends(get_db)):
     )
     summary = summary_result.scalar_one_or_none()
 
-    completed = summary is not None and summary.status == "completed"
-    processing = summary is not None and summary.status == "processing"
+    completed = summary is not None and summary.status == "completed" and bool(summary.summary_cn)
+    processing = summary is not None and summary.status == "processing" and bool(get_summary_queue().stats.get("running"))
     return PaperDetailResponse(
         id=paper.id,
         title=paper.title,
@@ -354,8 +430,8 @@ async def get_paper(paper_id: int, db: AsyncSession = Depends(get_db)):
         keyword_ids=[kw.id for kw in paper.keywords],
         crawled_at=paper.crawled_at,
         updated_at=paper.updated_at,
-        summary_cn=summary.summary_cn if summary else None,
-        key_points_cn=summary.key_points_cn if summary else None,
+        summary_cn=summary.summary_cn if completed else None,
+        key_points_cn=summary.key_points_cn if completed else None,
         model_used=summary.model_used if summary else None,
         summary_generated_at=summary.generated_at if summary else None,
         source_type=summary.source_type if summary else None,
@@ -375,8 +451,8 @@ async def toggle_star(paper_id: int, data: PaperStarRequest, db: AsyncSession = 
     summary_result = await db.execute(select(Summary).where(Summary.paper_id == paper_id))
     summary = summary_result.scalar_one_or_none()
 
-    completed = summary is not None and summary.status == "completed"
-    processing = summary is not None and summary.status == "processing"
+    completed = summary is not None and summary.status == "completed" and bool(summary.summary_cn)
+    processing = summary is not None and summary.status == "processing" and bool(get_summary_queue().stats.get("running"))
     return PaperResponse(
         id=paper.id,
         title=paper.title,

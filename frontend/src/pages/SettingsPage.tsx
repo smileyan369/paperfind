@@ -8,9 +8,14 @@ import { fetchPaperStats } from '../api/papers';
 import { sourceLabel } from '../utils/labels';
 import type { PaperStats } from '../types/paper';
 
+function formatLocalTime(value: string): string {
+  const normalized = /[zZ]|[+-]\d\d:\d\d$/.test(value) ? value : `${value}Z`;
+  return new Date(normalized).toLocaleString('zh-CN', { hour12: false });
+}
+
 export default function SettingsPage() {
   const { logs, logsTotal, schedule, changeSchedule } = useCrawl();
-  const { crawling, startCrawl } = useGlobalCrawl();
+  const { crawling, startCrawl, stopCrawl } = useGlobalCrawl();
   const { config, loading: configLoading, error: configError, saveConfig } = useAppConfig();
   const [stats, setStats] = useState<PaperStats | null>(null);
   const [hour, setHour] = useState(8);
@@ -20,6 +25,8 @@ export default function SettingsPage() {
   const [apiKey, setApiKeyLocal] = useState('');
   const [apiBaseUrl, setApiBaseUrl] = useState('');
   const [apiModel, setApiModel] = useState('');
+  const [researchProfile, setResearchProfile] = useState('');
+  const [profileSaved, setProfileSaved] = useState(false);
   const [savingConfig, setSavingConfig] = useState(false);
 
   useEffect(() => {
@@ -38,7 +45,8 @@ export default function SettingsPage() {
     if (!config) return;
     setApiBaseUrl(config.llm_base_url || '');
     setApiModel(config.llm_model || '');
-  }, [config?.llm_base_url, config?.llm_model]);
+    setResearchProfile(config.research_profile || '');
+  }, [config?.llm_base_url, config?.llm_model, config?.research_profile]);
 
   const handleSaveSchedule = async () => {
     await changeSchedule(hour, minute);
@@ -67,6 +75,17 @@ export default function SettingsPage() {
     }
   };
 
+  const handleSaveResearchProfile = async () => {
+    setSavingConfig(true);
+    try {
+      await saveConfig({ research_profile: researchProfile.trim() });
+      setProfileSaved(true);
+      setTimeout(() => setProfileSaved(false), 2000);
+    } finally {
+      setSavingConfig(false);
+    }
+  };
+
   const maskedKey = (key: string) => {
     if (!key) return '未设置';
     if (key.length <= 4 || key.startsWith('****')) return key.startsWith('****') ? key : '****';
@@ -86,6 +105,30 @@ export default function SettingsPage() {
           <p className="text-amber-700 text-xs mt-0.5">
             部分论文数据源在国内可能需要代理或 VPN 才能访问。爬取时如果某个来源无法连接，系统会跳过并记录原因。
           </p>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-lg border p-4">
+        <h3 className="font-semibold text-sm text-gray-700 mb-3">研究方向档案</h3>
+        <p className="text-xs text-gray-500 mb-2">
+          写下你的研究领域、关注问题、常用术语和不感兴趣的方向。AI 导读会优先参考这里的内容。
+        </p>
+        <textarea
+          value={researchProfile}
+          onChange={e => setResearchProfile(e.target.value)}
+          rows={5}
+          placeholder="例如：我关注医学影像报告生成、多模态大模型、临床可解释性；优先关注近三年论文，不关注纯硬件实现。"
+          className="w-full px-3 py-2 text-sm border rounded-md resize-y focus:outline-none focus:ring-1 focus:ring-indigo-400"
+        />
+        <div className="flex items-center gap-2 mt-2">
+          <button
+            onClick={handleSaveResearchProfile}
+            disabled={savingConfig || configLoading}
+            className="text-xs px-3 py-1.5 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:opacity-50"
+          >
+            {profileSaved ? '已保存' : '保存档案'}
+          </button>
+          <span className="text-xs text-gray-400">{researchProfile.trim().length} 字</span>
         </div>
       </div>
 
@@ -242,7 +285,7 @@ export default function SettingsPage() {
         <p className="text-xs text-gray-500 mb-3">
           立即触发一次爬取任务，从所有来源检索并入库论文。已存在的论文会跳过或补全信息。
         </p>
-        <CrawlButton crawling={crawling} onClick={() => startCrawl()} />
+        <CrawlButton crawling={crawling} onClick={() => startCrawl()} onCancel={stopCrawl} />
       </div>
 
       <div className="bg-white rounded-lg border p-4">
@@ -277,7 +320,7 @@ export default function SettingsPage() {
         </div>
         {schedule?.daily_crawl.next_run && (
           <p className="text-xs text-gray-500">
-            下次执行: {new Date(schedule.daily_crawl.next_run).toLocaleString('zh-CN')}
+            下次执行: {formatLocalTime(schedule.daily_crawl.next_run)}
           </p>
         )}
       </div>
@@ -297,7 +340,7 @@ export default function SettingsPage() {
                   {log.papers_updated > 0 && ` 更新 ${log.papers_updated}`}
                 </span>
                 <span className="text-xs text-gray-400 ml-auto">
-                  {new Date(log.started_at).toLocaleString('zh-CN')}
+                  {formatLocalTime(log.started_at)}
                 </span>
               </div>
             ))}

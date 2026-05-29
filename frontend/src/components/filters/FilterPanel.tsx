@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import type { FilterState, SciZone, PaperSource } from '../../types/filters';
 import { sourceLabel } from '../../utils/labels';
 
@@ -16,9 +17,33 @@ const ZONE_COLORS: Record<string, string> = {
   Q4: 'text-red-700 bg-red-50 border-red-300',
 };
 
-const SOURCES: PaperSource[] = ['arxiv', 'crossref', 'semantic_scholar', 'dblp', 'google_scholar', 'jnu_library', 'ieee', 'acm'];
+const SOURCES: PaperSource[] = ['arxiv', 'crossref', 'openalex', 'pubmed', 'europe_pmc', 'semantic_scholar', 'dblp', 'google_scholar', 'jnu_library'];
+
+function normalizeDateInput(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const normalized = trimmed.replace(/[./]/g, '-').replace(/年|月/g, '-').replace(/日/g, '');
+  const parts = normalized.split('-').filter(Boolean);
+  if (parts.length !== 3) return null;
+  const [year, month, day] = parts;
+  if (!/^\d{4}$/.test(year)) return null;
+  const mm = month.padStart(2, '0');
+  const dd = day.padStart(2, '0');
+  const iso = `${year}-${mm}-${dd}`;
+  return Number.isNaN(Date.parse(`${iso}T00:00:00`)) ? null : iso;
+}
+
+function displayDate(value: string | null): string {
+  return value ? value.replaceAll('-', '/') : '';
+}
 
 export default function FilterPanel({ filters, onChange, onReset, activeKeywordIds }: Props) {
+  const [dateFromText, setDateFromText] = useState(displayDate(filters.dateFrom));
+  const [dateToText, setDateToText] = useState(displayDate(filters.dateTo));
+
+  useEffect(() => setDateFromText(displayDate(filters.dateFrom)), [filters.dateFrom]);
+  useEffect(() => setDateToText(displayDate(filters.dateTo)), [filters.dateTo]);
+
   const toggleZone = (z: SciZone) => {
     const zones = filters.sciZones.includes(z)
       ? filters.sciZones.filter(x => x !== z)
@@ -34,8 +59,8 @@ export default function FilterPanel({ filters, onChange, onReset, activeKeywordI
   };
 
   return (
-    <aside className="w-64 shrink-0">
-      <div className="bg-white rounded-lg border p-4 space-y-5 sticky top-20 max-h-[calc(100vh-6rem)] overflow-y-auto">
+    <aside className="w-72 shrink-0">
+      <div className="glass-panel rounded-2xl p-4 space-y-5 sticky top-24 max-h-[calc(100vh-7rem)] overflow-y-auto">
         <div className="flex items-center justify-between">
           <h3 className="font-semibold text-gray-800">筛选</h3>
           {activeKeywordIds && activeKeywordIds.length > 0 && (
@@ -54,7 +79,7 @@ export default function FilterPanel({ filters, onChange, onReset, activeKeywordI
               placeholder="标题/摘要..."
               value={filters.searchQuery}
               onChange={e => onChange({ ...filters, searchQuery: e.target.value })}
-              className="w-full pl-2 pr-7 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-1 focus:ring-indigo-400"
+              className="w-full pl-3 pr-8 py-2 text-sm border border-slate-200 rounded-xl bg-white/80 focus:outline-none focus:ring-2 focus:ring-indigo-200"
             />
             {filters.searchQuery && (
               <button
@@ -99,8 +124,8 @@ export default function FilterPanel({ filters, onChange, onReset, activeKeywordI
                 onClick={() => toggleSource(s)}
                 className={`px-2 py-0.5 rounded text-xs transition-colors border ${
                   filters.sources.includes(s)
-                    ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
-                    : 'bg-gray-50 text-gray-400 border-gray-200'
+                    ? 'bg-indigo-50 text-indigo-700 border-indigo-200 shadow-sm'
+                    : 'bg-white/70 text-gray-400 border-gray-200 hover:bg-white'
                 }`}
               >
                 {sourceLabel(s)}
@@ -114,15 +139,21 @@ export default function FilterPanel({ filters, onChange, onReset, activeKeywordI
           <label className="text-xs text-gray-500 mb-1 block">日期范围</label>
           <div className="space-y-1.5">
             <input
-              type="date"
-              value={filters.dateFrom || ''}
-              onChange={e => onChange({ ...filters, dateFrom: e.target.value || null })}
+              type="text"
+              placeholder="年/月/日"
+              value={dateFromText}
+              onChange={e => setDateFromText(e.target.value)}
+              onBlur={() => onChange({ ...filters, dateFrom: normalizeDateInput(dateFromText) })}
+              onKeyDown={e => { if (e.key === 'Enter') onChange({ ...filters, dateFrom: normalizeDateInput(dateFromText) }); }}
               className="w-full px-2 py-1 text-xs border rounded-md"
             />
             <input
-              type="date"
-              value={filters.dateTo || ''}
-              onChange={e => onChange({ ...filters, dateTo: e.target.value || null })}
+              type="text"
+              placeholder="年/月/日"
+              value={dateToText}
+              onChange={e => setDateToText(e.target.value)}
+              onBlur={() => onChange({ ...filters, dateTo: normalizeDateInput(dateToText) })}
+              onKeyDown={e => { if (e.key === 'Enter') onChange({ ...filters, dateTo: normalizeDateInput(dateToText) }); }}
               className="w-full px-2 py-1 text-xs border rounded-md"
             />
           </div>
@@ -136,7 +167,7 @@ export default function FilterPanel({ filters, onChange, onReset, activeKeywordI
             min={0}
             value={filters.citationsMin ?? ''}
             onChange={e => onChange({ ...filters, citationsMin: e.target.value ? Number(e.target.value) : null })}
-            className="w-full px-2 py-1.5 text-sm border rounded-md"
+            className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl bg-white/80"
           />
         </div>
 
@@ -209,7 +240,7 @@ export default function FilterPanel({ filters, onChange, onReset, activeKeywordI
               onChange(reset);
             }
           }}
-          className="w-full text-xs py-1.5 rounded-md bg-gray-100 text-gray-500 hover:bg-gray-200 transition-colors"
+          className="w-full text-xs py-2 rounded-xl bg-slate-100 text-slate-500 hover:bg-slate-200 transition-colors"
         >
           重置筛选
         </button>

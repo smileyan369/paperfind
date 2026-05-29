@@ -25,6 +25,10 @@ jcr_csv = BACKEND / "data" / "jcr_seed.csv"
 if jcr_csv.exists():
     added_files.append((str(jcr_csv), "data"))
 
+app_icon = BACKEND / "app-icon.png"
+if app_icon.exists():
+    added_files.append((str(app_icon), "."))
+
 a = Analysis(
     ['run.py'],
     pathex=[str(BACKEND)],

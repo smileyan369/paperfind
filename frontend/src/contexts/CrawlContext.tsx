@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useCallback, useRef, useEffect, type ReactNode } from 'react';
 import type { Paper } from '../types/paper';
-import { streamCrawl, fetchCrawlStatus, type CrawlEvent } from '../api/crawl';
+import { streamCrawl, fetchCrawlStatus, cancelCrawl, type CrawlEvent } from '../api/crawl';
 
 interface UnreachableInfo {
   source: string;
@@ -15,6 +15,7 @@ interface CrawlState {
   newPapers: Paper[];
   unreachableSources: UnreachableInfo[];
   startCrawl: (source?: string, keywordIds?: number[]) => Promise<void>;
+  stopCrawl: () => Promise<void>;
   clearNewPapers: () => void;
   clearUnreachable: () => void;
 }
@@ -77,6 +78,10 @@ export function CrawlProvider({ children }: { children: ReactNode }) {
         } else if (event.type === 'status' || event.type === 'progress') {
           if (typeof event.progress === 'number') setCrawlProgress(event.progress);
           if (event.message) setCrawlMessage(event.message);
+        } else if (event.type === 'cancelled') {
+          if (typeof event.progress === 'number') setCrawlProgress(event.progress);
+          setCrawlMessage(event.message || '检索已取消');
+          setCrawling(false);
         } else if (event.type === 'error') {
           if (typeof event.progress === 'number') setCrawlProgress(event.progress);
           setCrawlMessage('检索失败');
@@ -96,6 +101,18 @@ export function CrawlProvider({ children }: { children: ReactNode }) {
         setCrawlMessage(null);
       }
     }, 8000);
+  }, []);
+
+  const stopCrawl = useCallback(async () => {
+    try {
+      await cancelCrawl();
+    } finally {
+      if (abortRef.current) {
+        abortRef.current.abort();
+      }
+      setCrawling(false);
+      setCrawlMessage('检索已取消');
+    }
   }, []);
 
   // On mount: check if a crawl is already running and reconnect
@@ -137,6 +154,10 @@ export function CrawlProvider({ children }: { children: ReactNode }) {
           } else if (event.type === 'status' || event.type === 'progress') {
             if (typeof event.progress === 'number') setCrawlProgress(event.progress);
             if (event.message) setCrawlMessage(event.message);
+          } else if (event.type === 'cancelled') {
+            if (typeof event.progress === 'number') setCrawlProgress(event.progress);
+            setCrawlMessage(event.message || '检索已取消');
+            setCrawling(false);
           } else if (event.type === 'error') {
             if (typeof event.progress === 'number') setCrawlProgress(event.progress);
             setCrawlMessage(event.message || '检索失败');
@@ -152,7 +173,7 @@ export function CrawlProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <CrawlContext.Provider value={{ crawling, crawlMessage, crawlProgress, crawlVersion, newPapers, unreachableSources, startCrawl, clearNewPapers, clearUnreachable }}>
+    <CrawlContext.Provider value={{ crawling, crawlMessage, crawlProgress, crawlVersion, newPapers, unreachableSources, startCrawl, stopCrawl, clearNewPapers, clearUnreachable }}>
       {children}
     </CrawlContext.Provider>
   );

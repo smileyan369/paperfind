@@ -1,23 +1,30 @@
 interface Props {
   crawling: boolean;
   onClick: () => void;
+  onCancel?: () => void;
 }
 
-export default function CrawlButton({ crawling, onClick }: Props) {
+export default function CrawlButton({ crawling, onClick, onCancel }: Props) {
+  if (crawling) {
+    return (
+      <button
+        onClick={onCancel}
+        className="px-4 py-2 rounded-lg bg-rose-600 text-white text-sm font-medium hover:bg-rose-700 transition-colors"
+      >
+        <span className="flex items-center gap-2">
+          <span className="animate-spin inline-block w-4 h-4 border-2 border-white/30 border-t-white rounded-full" />
+          取消检索
+        </span>
+      </button>
+    );
+  }
+
   return (
     <button
       onClick={onClick}
-      disabled={crawling}
-      className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+      className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 transition-colors"
     >
-      {crawling ? (
-        <span className="flex items-center gap-2">
-          <span className="animate-spin inline-block w-4 h-4 border-2 border-white/30 border-t-white rounded-full" />
-          爬取中...
-        </span>
-      ) : (
-        '立即爬取'
-      )}
+      立即爬取
     </button>
   );
 }

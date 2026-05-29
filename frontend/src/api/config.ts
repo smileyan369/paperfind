@@ -7,6 +7,7 @@ export interface AppConfig {
   llm_base_url: string;
   llm_model: string;
   auto_summary_enabled: boolean;
+  research_profile: string;
   ai_available: boolean;
 }
 
@@ -15,6 +16,12 @@ export interface ConfigUpdate {
   llm_base_url?: string;
   llm_model?: string;
   auto_summary_enabled?: boolean;
+  research_profile?: string;
+}
+
+export interface KeywordHistoryEntry {
+  text: string;
+  added_at: string;
 }
 
 export async function fetchConfig(): Promise<AppConfig> {
@@ -24,7 +31,18 @@ export async function fetchConfig(): Promise<AppConfig> {
 
 export async function updateConfig(updates: ConfigUpdate): Promise<AppConfig> {
   const { data } = await client.put('/config', updates);
+  writeLegacyLlmConfig(updates);
   return data;
+}
+
+export async function fetchKeywordHistory(): Promise<KeywordHistoryEntry[]> {
+  const { data } = await client.get('/config/keyword-history');
+  return data.entries || [];
+}
+
+export async function saveKeywordHistory(entries: KeywordHistoryEntry[]): Promise<KeywordHistoryEntry[]> {
+  const { data } = await client.put('/config/keyword-history', { entries });
+  return data.entries || [];
 }
 
 function isMaskedKey(key: string): boolean {
@@ -49,9 +67,28 @@ export function readLegacyLlmConfig(): ConfigUpdate | null {
   }
 }
 
+export function writeLegacyLlmConfig(updates: ConfigUpdate) {
+  try {
+    const existing = readLegacyLlmConfig() || {};
+    const next: ConfigUpdate = { ...existing };
+    const key = String(updates.llm_api_key || '').trim();
+    const baseUrl = String(updates.llm_base_url || '').trim();
+    const model = String(updates.llm_model || '').trim();
+    if (key && !isMaskedKey(key)) next.llm_api_key = key;
+    if (baseUrl) next.llm_base_url = baseUrl;
+    if (model) next.llm_model = model;
+    if (Object.keys(next).length > 0) {
+      localStorage.setItem(LEGACY_STORAGE_KEY, JSON.stringify(next));
+    }
+  } catch {
+    // ignore storage errors
+  }
+}
+
 export function clearLegacyLlmConfig() {
   try {
-    localStorage.removeItem(LEGACY_STORAGE_KEY);
+    // Keep this browser-side copy as a last-resort recovery path when users
+    // replace the packaged exe or accidentally point it at a fresh database.
   } catch {
     // ignore storage errors
   }

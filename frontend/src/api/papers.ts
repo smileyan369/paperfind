@@ -25,6 +25,20 @@ export async function fetchPaperStats(params?: Record<string, any>): Promise<Pap
   return data;
 }
 
+export interface DailyDigestItem {
+  id?: number;
+  title: string;
+  url?: string | null;
+  source: string;
+  date?: string | null;
+  summary?: string | null;
+}
+
+export async function fetchDailyDigest(limit = 6): Promise<{ items: DailyDigestItem[]; source: string }> {
+  const { data } = await client.get('/papers/daily-digest', { params: { limit } });
+  return data;
+}
+
 export function getExportUrl(params: Record<string, any>): string {
   const search = new URLSearchParams();
   Object.entries(params).forEach(([k, v]) => {

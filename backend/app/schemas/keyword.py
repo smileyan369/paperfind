@@ -29,3 +29,13 @@ class KeywordResponse(BaseModel):
 class KeywordImportRequest(BaseModel):
     keywords: str = Field(..., description="Newline-separated keywords")
     source: str = Field(default="all")
+
+
+class KeywordSuggestRequest(BaseModel):
+    query: str = Field(..., min_length=2, max_length=1000)
+    limit: int = Field(default=8, ge=1, le=20)
+
+
+class KeywordSuggestResponse(BaseModel):
+    suggestions: list[str]
+    source: str

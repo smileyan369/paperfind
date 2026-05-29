@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import xml.etree.ElementTree as ET
+from time import monotonic
 from datetime import datetime
 from typing import Any
 
@@ -16,6 +17,8 @@ ARXIV_API_URL = "https://export.arxiv.org/api/query"
 class ArxivCrawler(BaseCrawler):
     name = "arxiv"
     base_url = ARXIV_API_URL
+    _lock = asyncio.Lock()
+    _last_request = 0.0
 
     async def search(self, keyword: str, max_results: int = 100) -> list[dict[str, Any]]:
         # Quote multi-word keywords for exact phrase search — arXiv treats spaces as OR otherwise
@@ -27,24 +30,43 @@ class ArxivCrawler(BaseCrawler):
             "sortBy": "submittedDate",
             "sortOrder": "descending",
         }
-        # arXiv requires a delay between requests to avoid 429
-        await asyncio.sleep(3)
         resp = await self._request(self.base_url, params=params)
-        return self._parse_response(resp.text)
+        papers = self._parse_response(resp.text)
+        if len(papers) < 5 and " " in keyword:
+            fallback_params = {
+                **params,
+                "search_query": " AND ".join(f"all:{part}" for part in keyword.split()[:8]),
+                "max_results": max(10, min(max_results // 2, 30)),
+            }
+            fallback_resp = await self._request(self.base_url, params=fallback_params)
+            seen = {p.get("arxiv_id") or p.get("title") for p in papers}
+            for paper in self._parse_response(fallback_resp.text):
+                key = paper.get("arxiv_id") or paper.get("title")
+                if key not in seen:
+                    seen.add(key)
+                    papers.append(paper)
+        return papers
 
     async def _request(self, url: str, params: dict | None = None) -> httpx.Response:
         headers = {"User-Agent": "PaperCrawler/0.1 (mailto:user@example.com)"}
-        async with self.semaphore:
-            async with httpx.AsyncClient(timeout=30.0, headers=headers) as client:
-                resp = await client.get(url, params=params)
-                if resp.status_code == 429:
-                    retry_after = resp.headers.get("Retry-After", "30")
-                    wait = int(retry_after) if retry_after.isdigit() else 30
-                    logger.warning("arXiv rate limited, waiting %ds", wait)
-                    await asyncio.sleep(wait)
+        async with self._lock:
+            elapsed = monotonic() - self._last_request
+            if elapsed < 1.2:
+                await asyncio.sleep(1.2 - elapsed)
+            async with self.semaphore:
+                timeout = httpx.Timeout(connect=6.0, read=18.0, write=10.0, pool=8.0)
+                async with httpx.AsyncClient(timeout=timeout, headers=headers) as client:
                     resp = await client.get(url, params=params)
-                resp.raise_for_status()
-                return resp
+                    self._last_request = monotonic()
+                    if resp.status_code == 429:
+                        retry_after = resp.headers.get("Retry-After", "8")
+                        wait = int(retry_after) if retry_after.isdigit() else 8
+                        logger.warning("arXiv rate limited, waiting %ds", wait)
+                        await asyncio.sleep(min(wait, 12))
+                        resp = await client.get(url, params=params)
+                        self._last_request = monotonic()
+                    resp.raise_for_status()
+                    return resp
 
     def _parse_response(self, xml_text: str) -> list[dict[str, Any]]:
         ns = {
